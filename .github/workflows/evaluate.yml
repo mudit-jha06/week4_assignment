@@ -1,0 +1,184 @@
+# .github/workflows/evaluate.yml
+name: Evaluate Model Submission
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  checks: write
+  actions: read
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout student submission
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install onnxruntime pillow numpy scikit-learn
+        
+      - name: Clone private validation dataset
+        env:
+          VALIDATION_TOKEN: ${{ secrets.VALIDATION_TOKEN }}
+        run: |
+          # Clone the private validation dataset repository
+          git clone https://${VALIDATION_TOKEN}@github.com/ai-masterclass/week4_validation_dataset.git validation_repo
+          echo "✓ Successfully cloned validation dataset"
+          ls -la validation_repo/
+          # Find the actual test data folder
+          if [ -d "validation_repo/test_data" ]; then
+            TEST_DATA_PATH="validation_repo/test_data"
+          else
+            TEST_DATA_PATH="validation_repo"
+          fi
+          echo "Test data path: $TEST_DATA_PATH"
+          ls -la $TEST_DATA_PATH/
+          
+      - name: Verify models exist
+        run: |
+          if [ ! -f "models/baseline_model.onnx" ]; then
+            echo "❌ Error: models/baseline_model.onnx not found"
+            exit 1
+          fi
+          if [ ! -f "models/improved_model.onnx" ]; then
+            echo "❌ Error: models/improved_model.onnx not found"
+            exit 1
+          fi
+          echo "✓ Both model files found"
+          
+      - name: Evaluate models
+        id: evaluate
+        run: |
+          # Find the actual test data path
+          if [ -d "validation_repo/test_data" ]; then
+            TEST_DATA_PATH="validation_repo/test_data"
+          else
+            TEST_DATA_PATH="validation_repo"
+          fi
+          python .github/scripts/evaluate_submission.py --model models/ --test-data $TEST_DATA_PATH --batch-size 32
+        continue-on-error: true
+        
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evaluation-results
+          path: results.json
+          
+      - name: Comment results on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let results;
+            try {
+              results = JSON.parse(fs.readFileSync('results.json', 'utf8'));
+            } catch (error) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '❌ **Evaluation Failed**\n\nCould not read results. Please check the workflow logs.'
+              });
+              return;
+            }
+            
+            const passed = results.comparison.passed;
+            const emoji = passed ? '✅' : '❌';
+            const status = passed ? 'PASSED' : 'FAILED';
+            
+            const body = `## ${emoji} Evaluation ${status}
+            
+            ### Baseline Model
+            - **Accuracy:** ${results.baseline.accuracy.toFixed(2)}%
+            - **Macro F1 Score:** ${results.baseline.f1_macro.toFixed(4)}
+            
+            ### Improved Model
+            - **Accuracy:** ${results.improved.accuracy.toFixed(2)}%
+            - **Macro F1 Score:** ${results.improved.f1_macro.toFixed(4)}
+            
+            ### Comparison
+            - **Accuracy Improvement:** ${results.comparison.accuracy_improvement > 0 ? '+' : ''}${results.comparison.accuracy_improvement.toFixed(2)}%
+            - **F1 Score Improvement:** ${results.comparison.f1_improvement > 0 ? '+' : ''}${results.comparison.f1_improvement.toFixed(4)} (${((results.comparison.f1_improvement / results.baseline.f1_macro) * 100).toFixed(2)}%)
+            
+            ${passed ? '🎉 **Congratulations!** Your improved model performs better than the baseline.' : '⚠️ Your improved model does not perform better than the baseline. Keep working on it!'}
+            `;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+            
+      - name: Check evaluation result
+        id: check_result
+        run: |
+          if [ -f "results.json" ]; then
+            PASSED=$(python -c "import json; print(json.load(open('results.json'))['comparison']['passed'])")
+            if [ "$PASSED" = "True" ]; then
+              echo "✅ Evaluation PASSED"
+              echo "status=passing" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Evaluation FAILED"
+              echo "status=failing" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "❌ Results file not found"
+            echo "status=failing" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send webhook notification
+        if: always()
+        env:
+          WEBHOOK_URL: ${{ secrets.ASSIGNMENT_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.EXTERNAL_API_KEY }}
+        run: |
+          STATUS="${{ steps.check_result.outputs.status }}"
+          if [ -z "$STATUS" ]; then
+            STATUS="failing"
+          fi
+          
+          # Extract student username from repo name
+          # Handles: week-4-assignment-user, week4_assignment-user, week_4_assignment-user, etc.
+          REPO_NAME="${{ github.event.repository.name }}"
+          STUDENT_USERNAME=$(echo "$REPO_NAME" | sed -E 's/.*week[_-]?[0-9]+[_-]?assignment[_-]//')
+          
+          # Only send if webhook URL is configured
+          if [ -n "$WEBHOOK_URL" ]; then
+            curl -X POST "$WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
+              -d '{
+                "status": "'"$STATUS"'",
+                "github_username": "'"$STUDENT_USERNAME"'",
+                "repository": "${{ github.repository }}",
+                "commit_sha": "${{ github.sha }}",
+                "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
+                "week": "Week 4"
+              }'
+            echo "✓ Webhook notification sent"
+          else
+            echo "WEBHOOK_URL not configured, skipping notification"
+          fi
+
+      - name: Fail if evaluation failed
+        if: steps.check_result.outputs.status != 'passing'
+        run: exit 1
