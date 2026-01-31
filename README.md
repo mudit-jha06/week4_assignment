@@ -344,7 +344,7 @@ When you create a **pull request**, **GitHub Actions will automatically**:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/PROJECT_NAME.git
+git clone <repo_url>
 cd PROJECT_NAME
 ```
 
