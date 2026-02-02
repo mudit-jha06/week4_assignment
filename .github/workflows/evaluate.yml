@@ -133,6 +133,10 @@ jobs:
         run: |
           if [ -f "results.json" ]; then
             PASSED=$(python -c "import json; print(json.load(open('results.json'))['comparison']['passed'])")
+            ACCURACY=$(python -c "import json; print(json.load(open('results.json'))['improved']['accuracy'])")
+            F1_SCORE=$(python -c "import json; print(json.load(open('results.json'))['improved']['f1_macro'])")
+            echo "accuracy=$ACCURACY" >> $GITHUB_OUTPUT
+            echo "f1_score=$F1_SCORE" >> $GITHUB_OUTPUT
             if [ "$PASSED" = "True" ]; then
               echo "✅ Evaluation PASSED"
               echo "status=passing" >> $GITHUB_OUTPUT
@@ -143,6 +147,8 @@ jobs:
           else
             echo "❌ Results file not found"
             echo "status=failing" >> $GITHUB_OUTPUT
+            echo "accuracy=0" >> $GITHUB_OUTPUT
+            echo "f1_score=0" >> $GITHUB_OUTPUT
           fi
 
       - name: Send webhook notification
@@ -161,6 +167,10 @@ jobs:
           REPO_NAME="${{ github.event.repository.name }}"
           STUDENT_USERNAME=$(echo "$REPO_NAME" | sed -E 's/.*week[_-]?[0-9]+[_-]?assignment[_-]//')
           
+          # Get accuracy and F1 score from previous step
+          ACCURACY="${{ steps.check_result.outputs.accuracy }}"
+          F1_SCORE="${{ steps.check_result.outputs.f1_score }}"
+          
           # Only send if webhook URL is configured
           if [ -n "$WEBHOOK_URL" ]; then
             curl -X POST "$WEBHOOK_URL" \
@@ -172,7 +182,9 @@ jobs:
                 "repository": "${{ github.repository }}",
                 "commit_sha": "${{ github.sha }}",
                 "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
-                "week": "Week 4"
+                "week": "Week 4",
+                "accuracy": '"$ACCURACY"',
+                "f1_score": '"$F1_SCORE"'
               }'
             echo "✓ Webhook notification sent"
           else
