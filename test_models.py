@@ -8,8 +8,8 @@ by providing custom paths to your dataset and model files.
 
 Usage:
     python test_models.py \
-        --baseline ./path/to/baseline_model.pth \
-        --improved ./path/to/improved_model.pth \
+        --baseline ./path/to/baseline_model.onnx \
+        --improved ./path/to/improved_model.onnx \
         --test-data ./path/to/test_data
 """
 
@@ -59,9 +59,24 @@ def setup_temp_models_dir(baseline_path, improved_path):
     models_dir = Path(temp_dir) / 'models'
     models_dir.mkdir()
     
-    # Copy models to temp directory
-    shutil.copy2(baseline_path, models_dir / 'baseline_model.pth')
-    shutil.copy2(improved_path, models_dir / 'improved_model.pth')
+    baseline_path = Path(baseline_path)
+    improved_path = Path(improved_path)
+    
+    # Copy ONNX models to temp directory
+    shutil.copy2(baseline_path, models_dir / 'baseline_model.onnx')
+    shutil.copy2(improved_path, models_dir / 'improved_model.onnx')
+    
+    # Also copy .onnx.data files if they exist (required for large models)
+    baseline_data = baseline_path.parent / (baseline_path.stem + '.onnx.data')
+    improved_data = improved_path.parent / (improved_path.stem + '.onnx.data')
+    
+    if baseline_data.exists():
+        shutil.copy2(baseline_data, models_dir / 'baseline_model.onnx.data')
+        logger.info(f"  Copied {baseline_data.name}")
+    
+    if improved_data.exists():
+        shutil.copy2(improved_data, models_dir / 'improved_model.onnx.data')
+        logger.info(f"  Copied {improved_data.name}")
     
     logger.info(f"Created temporary models directory: {models_dir}")
     return temp_dir, models_dir
@@ -109,23 +124,23 @@ def main():
 Examples:
   # Test with specific models and dataset
   python test_models.py \\
-      --baseline ./mislabel_analysis_3/baseline_model.pth \\
-      --improved ./improved_analysis/baseline_model.pth \\
-      --test-data ./data2/seg_pred
+      --baseline ./models/baseline_model.onnx \\
+      --improved ./models/improved_model.onnx \\
+      --test-data ./dataset/validation_data
   
   # Test with custom batch size
   python test_models.py \\
-      --baseline ./models/baseline.pth \\
-      --improved ./models/improved.pth \\
+      --baseline ./models/baseline_model.onnx \\
+      --improved ./models/improved_model.onnx \\
       --test-data ./validation_data \\
       --batch-size 64
         """
     )
     
     parser.add_argument('--baseline', type=str, required=True,
-                       help='Path to baseline model (.pth file)')
+                       help='Path to baseline model (.onnx file)')
     parser.add_argument('--improved', type=str, required=True,
-                       help='Path to improved model (.pth file)')
+                       help='Path to improved model (.onnx file)')
     parser.add_argument('--test-data', type=str, required=True,
                        help='Path to test/validation data directory')
     parser.add_argument('--batch-size', type=int, default=32,
