@@ -162,10 +162,7 @@ jobs:
             STATUS="failing"
           fi
           
-          # Extract student username from repo name
-          # Handles: week-4-assignment-user, week4_assignment-user, week_4_assignment-user, etc.
-          REPO_NAME="${{ github.event.repository.name }}"
-          STUDENT_USERNAME=$(echo "$REPO_NAME" | sed -E 's/.*week[_-]?[0-9]+[_-]?assignment[_-]//')
+          STUDENT_USERNAME="${{ github.event.pull_request.user.login || github.actor }}"
           
           # Get accuracy and F1 score from previous step
           ACCURACY="${{ steps.check_result.outputs.accuracy }}"
